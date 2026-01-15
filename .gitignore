@@ -1,0 +1,26 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# Virtualenv
+venv/
+*.venv/
+
+# Environment variables (secrets)
+.env
+
+# Databases (if SQLite)
+*.db
+*.sqlite3
+
+# Logs and temp
+*.log
+*.tmp
+*.swp
+
+# PyCharm specific
+.idea/
