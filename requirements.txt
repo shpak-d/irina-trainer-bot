@@ -1,0 +1,4 @@
+aiogram==3.13.1
+python-dotenv
+
+pip freeze > requirements.txt

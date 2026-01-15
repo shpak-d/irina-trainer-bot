@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ChatJoinRequest
@@ -41,6 +42,113 @@ def get_payment_kb(user_id: int, tariff: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Я оплатив", callback_data=f"paid_{user_id}_{tariff}")],
         [InlineKeyboardButton(text="← Назад до меню", callback_data="back")]
     ])
+
+
+@dp.message(F.photo | F.document | F.video)
+async def handle_proof(message: Message):
+    user_id = message.from_user.id
+    logger.info(f"Отримано медіа від {user_id} (тип: {message.content_type})")
+
+    if user_id in waiting_for_proof:
+        data = waiting_for_proof[user_id]
+        username = data["username"]
+        tariff_name = data["tariff"]
+
+        logger.info(f"Пересилання медіа адміну від {user_id}")
+
+        await bot.forward_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id
+        )
+
+        await bot.send_message(
+            ADMIN_ID,
+            f"Ось скрін/чек від @{username} (ID: {user_id})\n"
+            f"Тариф: {tariff_name}\n"
+            "Перевірте, будь ласка!"
+        )
+
+        await message.answer(
+            "Скрін/чек успішно надіслано адміністратору! ❤️\n"
+            "Зачекайте на підтвердження."
+        )
+
+        del waiting_for_proof[user_id]
+    else:
+        await message.answer("Якщо це оплата — спочатку натисніть «Я оплатив» після вибору тарифу 🙏")
+
+
+@dp.message(Command("approve"))
+async def cmd_approve(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Ця команда тільки для адміністратора.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Використання: /approve [user_id]\nПриклад: /approve 377139113")
+        return
+
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await message.answer("Вкажіть правильний user_id (число).")
+        return
+
+    try:
+        expire_date = datetime.utcnow() + timedelta(hours=24)  # 24 години
+
+        invite = await bot.create_chat_invite_link(
+            chat_id=GROUP_ID,
+            creates_join_request=True,
+            name=f"Доступ для {target_id}",
+            expire_date=expire_date
+        )
+        link = invite.invite_link
+
+        await message.answer(
+            f"Одноразове посилання створено (діє 24 години):\n{link}"
+        )
+
+        await bot.send_message(
+            target_id,
+            "Вітаємо в нашій дружній спільноті! 🎉\n"
+            "Доступ активовано!\n\n"
+            f"Натисни це посилання (діє 24 години):\n{link}\n\n"
+            "Після натискання ти надішлеш запит на вступ — бот автоматично схвалить тебе за кілька секунд 💪"
+        )
+
+        await message.answer(f"Посилання надіслано користувачу {target_id}.")
+        logger.info(f"Адмін створив одноразове посилання для {target_id}")
+
+    except Exception as e:
+        logger.error(f"Помилка створення запрошення: {e}")
+        await message.answer(f"Помилка: {str(e)}\nПеревірте GROUP_ID та права бота.")
+
+
+@dp.chat_join_request()
+async def auto_approve_join(request: ChatJoinRequest):
+    if request.chat.id == GROUP_ID:
+        await bot.approve_chat_join_request(
+            chat_id=request.chat.id,
+            user_id=request.from_user.id
+        )
+        logger.info(f"Автоматично схвалено вступ {request.from_user.id}")
+        await bot.send_message(
+            request.from_user.id,
+            "Вітаємо в групі! 🎉\nТепер ти в нашій дружній спільноті з тренуваннями Ірини 💪"
+        )
+
+
+@dp.message(F.chat.type == "private")
+async def welcome(message: Message):
+    await message.answer(
+        "Привіт! 👋 Дякую, що звернувся до мене!\n"
+        "Я — бот для платних тренувань Ірини: відео, чат, підтримка та мотивація 💙\n\n"
+        "Обери тариф і почнемо твій шлях до результатів! 🚀",
+        reply_markup=main_menu
+    )
 
 
 @dp.callback_query(F.data == "choose_tariff")
@@ -132,108 +240,6 @@ async def user_paid(callback: CallbackQuery):
         f"Користувач: @{username} (ID: {user_id})\n"
         f"Тариф: {tariff_name}\n"
         "Чекаємо скрін/чек..."
-    )
-
-
-@dp.message(F.photo | F.document | F.video)
-async def handle_proof(message: Message):
-    user_id = message.from_user.id
-    logger.info(f"Отримано медіа від {user_id} (тип: {message.content_type})")
-
-    if user_id in waiting_for_proof:
-        data = waiting_for_proof[user_id]
-        username = data["username"]
-        tariff_name = data["tariff"]
-
-        logger.info(f"Пересилання медіа адміну від {user_id}")
-
-        await bot.forward_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id
-        )
-
-        await bot.send_message(
-            ADMIN_ID,
-            f"Ось скрін/чек від @{username} (ID: {user_id})\n"
-            f"Тариф: {tariff_name}\n"
-            "Перевірте, будь ласка!"
-        )
-
-        await message.answer(
-            "Скрін/чек успішно надіслано адміністратору! ❤️\n"
-            "Зачекайте на підтвердження."
-        )
-
-        del waiting_for_proof[user_id]
-    else:
-        await message.answer("Якщо це оплата — спочатку натисніть «Я оплатив» після вибору тарифу 🙏")
-
-
-@dp.message(Command("approve"))
-async def cmd_approve(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("Ця команда тільки для адміністратора.")
-        return
-
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("Використання: /approve [user_id]\nПриклад: /approve 377139113")
-        return
-
-    try:
-        target_id = int(args[1])
-    except ValueError:
-        await message.answer("Вкажіть правильний user_id (число).")
-        return
-
-    try:
-        invite = await bot.create_chat_invite_link(
-            chat_id=GROUP_ID,
-            creates_join_request=True,
-            name=f"Доступ для {target_id}"
-        )
-        link = invite.invite_link
-
-        await message.answer(f"Посилання створено (для перевірки):\n{link}")
-
-        await bot.send_message(
-            target_id,
-            "Вітаємо в нашій дружній спільноті! 🎉\n"
-            "Доступ активовано!\n\n"
-            f"Натисни це посилання, щоб приєднатися до групи:\n{link}\n\n"
-            "Після натискання бот автоматично схвалить твій запит за кілька секунд 💪"
-        )
-
-        await message.answer(f"Доступ для користувача {target_id} активовано! Посилання надіслано.")
-        logger.info(f"Адмін схвалив доступ для {target_id}")
-
-    except Exception as e:
-        logger.error(f"Помилка створення запрошення: {e}")
-        await message.answer(f"Помилка: {str(e)}\nПеревірте GROUP_ID та права бота.")
-
-
-@dp.chat_join_request()
-async def auto_approve_join(request: ChatJoinRequest):
-    if request.chat.id == GROUP_ID:
-        await bot.approve_chat_join_request(
-            chat_id=request.chat.id,
-            user_id=request.from_user.id
-        )
-        logger.info(f"Автоматично схвалено вступ {request.from_user.id}")
-        await bot.send_message(
-            request.from_user.id,
-            "Вітаємо в групі! 🎉\nТепер ти в нашій дружній спільноті з тренуваннями Ірини 💪"
-        )
-
-
-@dp.message(F.text)
-async def welcome(message: Message):
-    await message.answer(
-        "Привіт! 👋 Дякую, що звернувся до мене!\n"
-        "Я — бот для платних тренувань Ірини: відео, чат, підтримка та мотивація 💙\n\n"
-        "Обери тариф і почнемо твій шлях до результатів! 🚀",
-        reply_markup=main_menu
     )
 
 
