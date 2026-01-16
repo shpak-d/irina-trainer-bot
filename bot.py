@@ -10,12 +10,12 @@ import os
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID") or 5387819554)
-GROUP_ID = int(os.getenv("GROUP_ID") or -1003660114914)
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+GROUP_ID = int(os.getenv("GROUP_ID"))
 
-PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT", "Тренер Ірина")
-PAYMENT_IBAN = os.getenv("PAYMENT_IBAN", "UA12345678900000000000000000")
-PAYMENT_BANK = os.getenv("PAYMENT_BANK", "Монобанк")
+PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT")
+PAYMENT_IBAN = os.getenv("PAYMENT_IBAN")
+PAYMENT_BANK = os.getenv("PAYMENT_BANK")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
