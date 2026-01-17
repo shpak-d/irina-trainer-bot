@@ -7,6 +7,8 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from dotenv import load_dotenv
 import os
 import sqlite3
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 load_dotenv()
 
@@ -80,6 +82,71 @@ def save_subscription(user_id: int, username: str, tariff: str, days: int):
     conn.commit()
     conn.close()
 
+async def check_subscriptions():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT user_id, username, tariff, end_date, status 
+        FROM users 
+        WHERE status IN ('active', 'grace')
+    """)
+    users = cur.fetchall()
+    conn.close()
+
+    now = datetime.utcnow()
+
+    for user_id, username, tariff, end_date_str, status in users:
+        end_date = datetime.fromisoformat(end_date_str)
+        days_past_end = (now - end_date).days
+
+        if status == 'active' and days_past_end >= 0:
+            # Початок grace period
+            new_end = end_date + timedelta(days=2)  # grace до цього
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            cur.execute("UPDATE users SET status = 'grace', end_date = ? WHERE user_id = ?",
+                        (new_end.isoformat(), user_id))
+            conn.commit()
+            conn.close()
+
+            await bot.send_message(
+                user_id,
+                f"Привіт! Твоя підписка ({tariff}) закінчилася вчора.\n"
+                f"У тебе є ще 2 дні grace-періоду, щоб продовжити без втрати доступу! 💪\n"
+                "Обери тариф у меню і оплати, щоб залишитися з нами ❤️"
+            )
+            logger.info(f"Grace почався для {user_id}")
+
+        elif status == 'grace':
+            if days_past_end == 1:
+                # День 1 grace — нагадування
+                await bot.send_message(
+                    user_id,
+                    f"Залишився 1 день grace-періоду!\n"
+                    f"Продовж підписку сьогодні, щоб не втратити доступ до тренувань 💙\n"
+                    "Натисни /start і обери тариф!"
+                )
+            elif days_past_end >= 2:
+                # Кік + expired
+                try:
+                    await bot.ban_chat_member(chat_id=GROUP_ID, user_id=user_id)
+                    await bot.unban_chat_member(chat_id=GROUP_ID, user_id=user_id)  # щоб можна було повернутися пізніше
+                    logger.info(f"Кік користувача {user_id} після grace")
+
+                    conn = sqlite3.connect(DB_FILE)
+                    cur = conn.cursor()
+                    cur.execute("UPDATE users SET status = 'expired' WHERE user_id = ?", (user_id,))
+                    conn.commit()
+                    conn.close()
+
+                    await bot.send_message(
+                        user_id,
+                        "На жаль, grace-період закінчився 😔\n"
+                        "Твій доступ до групи закрито.\n"
+                        "Щоб повернутися — обери тариф, оплати і напиши мені знову! 🚀"
+                    )
+                except Exception as e:
+                    logger.error(f"Помилка кику {user_id}: {e}")
 
 def get_user_status(user_id: int) -> dict | None:
     conn = sqlite3.connect(DB_FILE)
@@ -96,6 +163,13 @@ def get_user_status(user_id: int) -> dict | None:
             "status": row[3]
         }
     return None
+
+@dp.message(Command("checksubs"))
+async def cmd_checksubs(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await check_subscriptions()
+    await message.answer("Перевірку закінчення підписок виконано вручну!")
 
 def get_payment_kb(user_id: int, tariff: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -334,6 +408,15 @@ async def main():
 
     init_db()  # ← додаємо тут
     print("База даних ініціалізована")
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        check_subscriptions,
+        CronTrigger(hour=9, minute=0),  # щодня о 9:00 ранку за серверним часом
+        id='daily_subscription_check'
+    )
+    scheduler.start()
+    print("Планувальник запущено (перевірка щодня о 9:00)")
 
     await dp.start_polling(
         bot,
