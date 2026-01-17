@@ -24,3 +24,5 @@ venv/
 
 # PyCharm specific
 .idea/
+
+users.db

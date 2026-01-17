@@ -6,16 +6,17 @@ from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ChatJoinRequest
 from dotenv import load_dotenv
 import os
+import sqlite3
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID") or 5387819554)
-GROUP_ID = int(os.getenv("GROUP_ID") or -1003660114914)
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+GROUP_ID = int(os.getenv("GROUP_ID"))
 
-PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT", "Тренер Ірина")
-PAYMENT_IBAN = os.getenv("PAYMENT_IBAN", "UA12345678900000000000000000")
-PAYMENT_BANK = os.getenv("PAYMENT_BANK", "Монобанк")
+PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT")
+PAYMENT_IBAN = os.getenv("PAYMENT_IBAN")
+PAYMENT_BANK = os.getenv("PAYMENT_BANK")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -36,6 +37,65 @@ tariffs_menu = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="← Назад", callback_data="back")]
 ])
 
+DB_FILE = "users.db"
+
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            tariff TEXT,
+            start_date TEXT,
+            end_date TEXT,
+            status TEXT DEFAULT 'pending',  -- pending / active / grace / expired / blocked
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+def save_subscription(user_id: int, username: str, tariff: str, days: int):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+
+    start = datetime.utcnow()
+    end = start + timedelta(days=days)
+
+    cur.execute('''
+        INSERT OR REPLACE INTO users 
+        (user_id, username, tariff, start_date, end_date, status)
+        VALUES (?, ?, ?, ?, ?, 'active')
+    ''', (
+        user_id,
+        username,
+        tariff,
+        start.isoformat(),
+        end.isoformat()
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_user_status(user_id: int) -> dict | None:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT tariff, start_date, end_date, status FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+
+    if row:
+        return {
+            "tariff": row[0],
+            "start_date": row[1],
+            "end_date": row[2],
+            "status": row[3]
+        }
+    return None
 
 def get_payment_kb(user_id: int, tariff: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -87,18 +147,30 @@ async def cmd_approve(message: Message):
 
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("Використання: /approve [user_id]\nПриклад: /approve 377139113")
+        await message.answer("Використання: /approve [user_id]")
         return
 
     try:
         target_id = int(args[1])
     except ValueError:
-        await message.answer("Вкажіть правильний user_id (число).")
+        await message.answer("user_id має бути числом.")
         return
 
-    try:
-        expire_date = datetime.utcnow() + timedelta(hours=24)  # 24 години
+    # Отримуємо дані з waiting_for_proof (якщо є)
+    tariff_period = None
+    if target_id in waiting_for_proof:
+        data = waiting_for_proof[target_id]
+        tariff_name = data["tariff"]
+        tariff_period = "14days" if "14" in tariff_name else "1month"
+        del waiting_for_proof[target_id]  # чистимо після апруву
+    else:
+        tariff_name = "невідомо"
+        tariff_period = "14days"  # дефолт, або можна зробити помилку
 
+    days = 14 if tariff_period == "14days" else 30
+
+    try:
+        expire_date = datetime.utcnow() + timedelta(hours=24)
         invite = await bot.create_chat_invite_link(
             chat_id=GROUP_ID,
             creates_join_request=True,
@@ -107,24 +179,25 @@ async def cmd_approve(message: Message):
         )
         link = invite.invite_link
 
-        await message.answer(
-            f"Одноразове посилання створено (діє 24 години):\n{link}"
-        )
+        # Зберігаємо підписку в БД
+        username = (await bot.get_chat(target_id)).username or f"id{target_id}"
+        save_subscription(target_id, username, tariff_name, days)
+
+        await message.answer(f"Посилання створено (24 год):\n{link}\nПідписка збережена в БД.")
 
         await bot.send_message(
             target_id,
             "Вітаємо в нашій дружній спільноті! 🎉\n"
             "Доступ активовано!\n\n"
-            f"Натисни це посилання (діє 24 години):\n{link}\n\n"
-            "Після натискання ти надішлеш запит на вступ — бот автоматично схвалить тебе за кілька секунд 💪"
+            f"Натисни посилання (діє 24 години):\n{link}\n\n"
+            "Після натискання бот автоматично схвалить твій запит за кілька секунд 💪"
         )
 
-        await message.answer(f"Посилання надіслано користувачу {target_id}.")
-        logger.info(f"Адмін створив одноразове посилання для {target_id}")
+        logger.info(f"Апрув + збереження підписки для {target_id} ({tariff_name})")
 
     except Exception as e:
-        logger.error(f"Помилка створення запрошення: {e}")
-        await message.answer(f"Помилка: {str(e)}\nПеревірте GROUP_ID та права бота.")
+        logger.error(f"Помилка в /approve: {e}")
+        await message.answer(f"Помилка: {str(e)}")
 
 
 @dp.chat_join_request()
@@ -176,11 +249,22 @@ async def back_to_main(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "my_status")
 async def my_status(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "Твій статус підписки поки що не активовано.\n"
-        "Обери тариф, щоб отримати доступ! 💪",
-        reply_markup=main_menu
-    )
+    user_id = callback.from_user.id
+    data = get_user_status(user_id)
+
+    if not data or data["status"] not in ["active", "grace"]:
+        text = "Твій статус підписки поки що не активовано.\nОбери тариф, щоб отримати доступ! 💪"
+    else:
+        end_date = datetime.fromisoformat(data["end_date"])
+        days_left = (end_date - datetime.utcnow()).days
+        text = (
+            f"Твоя підписка: **{data['tariff']}**\n"
+            f"Активна до: **{end_date.strftime('%d.%m.%Y')}**\n"
+            f"Залишилось приблизно {max(0, days_left)} днів\n\n"
+            "Продовжуй рухатись до мети! 🚀"
+        )
+
+    await callback.message.edit_text(text, reply_markup=main_menu, parse_mode="Markdown")
     await callback.answer()
 
 
@@ -247,6 +331,10 @@ async def main():
     print("Бот запускається...")
     print(f"ADMIN_ID: {ADMIN_ID}")
     print(f"GROUP_ID: {GROUP_ID}")
+
+    init_db()  # ← додаємо тут
+    print("База даних ініціалізована")
+
     await dp.start_polling(
         bot,
         allowed_updates=["message", "callback_query", "chat_join_request"]
