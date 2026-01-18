@@ -64,20 +64,43 @@ def save_subscription(user_id: int, username: str, tariff: str, days: int):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    start = datetime.utcnow()
-    end = start + timedelta(days=days)
+    now = datetime.utcnow()
 
-    cur.execute('''
-        INSERT OR REPLACE INTO users 
-        (user_id, username, tariff, start_date, end_date, status)
-        VALUES (?, ?, ?, ?, ?, 'active')
-    ''', (
-        user_id,
-        username,
-        tariff,
-        start.isoformat(),
-        end.isoformat()
-    ))
+    # Перевіряємо, чи є вже запис
+    cur.execute("SELECT end_date, status FROM users WHERE user_id = ?", (user_id,))
+    existing = cur.fetchone()
+
+    if existing:
+        old_end_str, status = existing
+        old_end = datetime.fromisoformat(old_end_str)
+
+        # Беремо дату, від якої продовжуємо: max(зараз, стара end_date)
+        base_date = max(now, old_end)
+
+        new_end = base_date + timedelta(days=days)
+
+        # Оновлюємо тільки дати + статус на active
+        cur.execute("""
+            UPDATE users 
+            SET tariff = ?, 
+                start_date = ?, 
+                end_date = ?, 
+                status = 'active',
+                username = ?
+            WHERE user_id = ?
+        """, (tariff, now.isoformat(), new_end.isoformat(), username, user_id))
+
+        logger.info(f"Продовжено підписку для {user_id}: +{days} днів")
+    else:
+        # Новий користувач
+        new_end = now + timedelta(days=days)
+        cur.execute('''
+            INSERT INTO users 
+            (user_id, username, tariff, start_date, end_date, status)
+            VALUES (?, ?, ?, ?, ?, 'active')
+        ''', (user_id, username, tariff, now.isoformat(), new_end.isoformat()))
+
+        logger.info(f"Нова підписка для {user_id}: {days} днів")
 
     conn.commit()
     conn.close()
@@ -276,15 +299,37 @@ async def cmd_approve(message: Message):
 
 @dp.chat_join_request()
 async def auto_approve_join(request: ChatJoinRequest):
-    if request.chat.id == GROUP_ID:
+    if request.chat.id != GROUP_ID:
+        return
+
+    user_id = request.from_user.id
+
+    # Перевіряємо, чи цей користувач має активну/грас підписку в БД
+    data = get_user_status(user_id)
+
+    if data and data['status'] in ['active', 'grace']:
         await bot.approve_chat_join_request(
             chat_id=request.chat.id,
-            user_id=request.from_user.id
+            user_id=user_id
         )
-        logger.info(f"Автоматично схвалено вступ {request.from_user.id}")
+        logger.info(f"Автосхвалено вступ {user_id} (має підписку)")
+
         await bot.send_message(
-            request.from_user.id,
+            user_id,
             "Вітаємо в групі! 🎉\nТепер ти в нашій дружній спільноті з тренуваннями Ірини 💪"
+        )
+    else:
+        # Якщо немає підписки — відхиляємо або ігноруємо
+        await bot.decline_chat_join_request(
+            chat_id=request.chat.id,
+            user_id=user_id
+        )
+        logger.warning(f"Відхилено вступ {user_id} — немає активної підписки")
+
+        # Опціонально: повідомити адміну
+        await bot.send_message(
+            ADMIN_ID,
+            f"Хтось ({user_id} / @{request.from_user.username or 'без імені'}) спробував вступити без підписки!"
         )
 
 
