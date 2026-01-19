@@ -1,11 +1,15 @@
 import asyncio
 import logging
+import os
+import sys
 from datetime import datetime, timedelta
+
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ChatJoinRequest
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from dotenv import load_dotenv
-import os
 import sqlite3
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -15,12 +19,16 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 GROUP_ID = int(os.getenv("GROUP_ID"))
-
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT")
 PAYMENT_IBAN = os.getenv("PAYMENT_IBAN")
 PAYMENT_BANK = os.getenv("PAYMENT_BANK")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Webhook налаштування (додаємо з .env або Render variables)
+WEBHOOK_PATH = "/webhook"
+BASE_WEBHOOK_URL = os.getenv("BASE_WEBHOOK_URL")  # наприклад https://your-bot.onrender.com
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my-super-secret-2026")  # обов'язково зміни на свій!
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN)
@@ -445,29 +453,88 @@ async def user_paid(callback: CallbackQuery):
         "Чекаємо скрін/чек..."
     )
 
+# Startup: встановлюємо webhook
+async def on_startup(bot: Bot):
+    if not BASE_WEBHOOK_URL:
+        logger.error("BASE_WEBHOOK_URL не встановлено в змінних середовища!")
+        sys.exit(1)
 
-async def main():
+    webhook_url = f"{BASE_WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
+    await bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        drop_pending_updates=True  # ігноруємо старі оновлення після рестарту
+    )
+    logger.info(f"Webhook встановлено на {webhook_url}")
+
+# Shutdown: видаляємо webhook (опціонально, але корисно)
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+    logger.info("Webhook видалено")
+
+# ... весь твій код до кінця хендлерів без змін ...
+
+# Startup і shutdown залишаються async
+# ... весь твій код до кінця хендлерів без змін ...
+
+# Startup і shutdown залишаються async
+async def on_startup(bot: Bot):
+    if not BASE_WEBHOOK_URL:
+        logger.error("BASE_WEBHOOK_URL не встановлено в змінних середовища!")
+        sys.exit(1)
+
+    webhook_url = f"{BASE_WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
+    await bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        drop_pending_updates=True
+    )
+    logger.info(f"Webhook встановлено на {webhook_url}")
+
+    # Запускаємо планувальник тут — event loop вже існує!
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        check_subscriptions,
+        CronTrigger(hour=9, minute=0),
+        id='daily_subscription_check'
+    )
+    scheduler.start()
+    logger.info("Планувальник запущено (перевірка щодня о 9:00)")
+
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+    logger.info("Webhook видалено")
+
+def main():
     print("Бот запускається...")
     print(f"ADMIN_ID: {ADMIN_ID}")
     print(f"GROUP_ID: {GROUP_ID}")
 
-    init_db()  # ← додаємо тут
+    init_db()
     print("База даних ініціалізована")
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        check_subscriptions,
-        CronTrigger(hour=9, minute=0),  # щодня о 9:00 ранку за серверним часом
-        id='daily_subscription_check'
-    )
-    scheduler.start()
-    print("Планувальник запущено (перевірка щодня о 9:00)")
+    # aiohttp додаток
+    app = web.Application()
 
-    await dp.start_polling(
-        bot,
-        allowed_updates=["message", "callback_query", "chat_join_request"]
+    webhook_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        secret_token=WEBHOOK_SECRET,
+        handle_in_background=True
     )
+    webhook_handler.register(app, path=WEBHOOK_PATH)
 
+    setup_application(app, dp, bot=bot)
+
+    # Реєструємо startup/shutdown
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+
+    port = int(os.getenv("PORT", 8080))
+
+    # Запускаємо сервер — це створює event loop
+    # Всередині startup ми запустимо scheduler
+    web.run_app(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
