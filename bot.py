@@ -509,6 +509,10 @@ def main():
     print("Бот запускається...")
     print(f"ADMIN_ID: {ADMIN_ID}")
     print(f"GROUP_ID: {GROUP_ID}")
+    port = int(os.getenv("PORT", 8080))
+    print(f"Запуск сервера на порту: {port}")
+    print(f"BASE_WEBHOOK_URL: {BASE_WEBHOOK_URL}")
+    print(f"WEBHOOK_SECRET: {WEBHOOK_SECRET[:5]}... (скрито)")
 
     init_db()
     print("База даних ініціалізована")
