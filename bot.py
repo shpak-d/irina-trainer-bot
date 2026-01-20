@@ -195,6 +195,123 @@ def get_user_status(user_id: int) -> dict | None:
         }
     return None
 
+@dp.message(Command("admin"))
+async def cmd_admin(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Доступ заборонено. Це тільки для адміністратора.")
+        return
+
+    admin_menu = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Список підписників", callback_data="admin_listusers")],
+        [InlineKeyboardButton(text="Додати підписку", callback_data="admin_addsub")],
+        [InlineKeyboardButton(text="Видалити підписку", callback_data="admin_removesub")],
+        [InlineKeyboardButton(text="Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="Закрити меню", callback_data="admin_close")]
+    ])
+
+    await message.answer(
+        "Вітаю в адмін-панелі! 💻\n"
+        "Що хочеш зробити?",
+        reply_markup=admin_menu
+    )
+
+@dp.callback_query(F.data.startswith("admin_"))
+async def admin_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Доступ заборонено!", show_alert=True)
+        return
+
+    data = callback.data
+
+    if data == "admin_listusers":
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute("SELECT user_id, username, tariff, end_date, status FROM users ORDER BY end_date DESC")
+        users = cur.fetchall()
+        conn.close()
+
+        if not users:
+            text = "Підписників поки що немає."
+        else:
+            text = "Список підписників:\n\n"
+            for uid, uname, tar, edate, stat in users:
+                text += f"ID: {uid} | @{uname or 'немає'} | {tar} | До: {edate} | {stat}\n"
+
+        await callback.message.edit_text(text)  # без reply_markup
+
+    elif data == "admin_addsub":
+        await callback.message.edit_text(
+            "Введи: /addsub [user_id] [tariff] [days]\n"
+            "Приклад: /addsub 123456789 14days 14"
+        )
+
+    elif data == "admin_removesub":
+        await callback.message.edit_text(
+            "Введи: /removesub [user_id]\n"
+            "Приклад: /removesub 123456789"
+        )
+
+    elif data == "admin_stats":
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE status = 'active'")
+        active = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        conn.close()
+
+        text = f"Статистика:\nАктивних підписників: {active}\nВсього записів: {total}"
+        await callback.message.edit_text(text)  # без reply_markup
+
+    elif data == "admin_close":
+        await callback.message.delete()
+
+    await callback.answer()
+
+@dp.message(Command("addsub"))
+async def cmd_addsub(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    args = message.text.split()[1:]
+    if len(args) < 3:
+        await message.answer("Формат: /addsub [user_id] [tariff] [days]\nПриклад: /addsub 123456789 14days 14")
+        return
+
+    try:
+        user_id = int(args[0])
+        tariff = args[1]
+        days = int(args[2])
+    except:
+        await message.answer("Неправильний формат.")
+        return
+
+    username = (await bot.get_chat(user_id)).username or f"id{user_id}"
+    save_subscription(user_id, username, tariff, days)
+    await message.answer(f"Підписка додана/продовжена для {user_id} ({tariff}, {days} днів)")
+
+@dp.message(Command("removesub"))
+async def cmd_removesub(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Формат: /removesub [user_id]")
+        return
+
+    try:
+        user_id = int(args[1])
+    except:
+        await message.answer("user_id має бути числом.")
+        return
+
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    await message.answer(f"Підписка для {user_id} видалена.")
+
 @dp.message(Command("checksubs"))
 async def cmd_checksubs(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -343,6 +460,12 @@ async def auto_approve_join(request: ChatJoinRequest):
 
 @dp.message(F.chat.type == "private")
 async def welcome(message: Message):
+    if message.from_user.id == ADMIN_ID:
+        # Для адміна — нічого не надсилаємо автоматично
+        # або одразу показуємо адмін-меню, якщо хочеш
+        return  # просто ігноруємо, щоб не було привітання
+
+    # Для всіх інших — звичайне привітання
     await message.answer(
         "Привіт! 👋 Дякую, що звернувся до мене!\n"
         "Я — бот для платних тренувань Ірини: відео, чат, підтримка та мотивація 💙\n\n"
