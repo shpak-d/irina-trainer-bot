@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import sqlite3
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from aiogram.types import FSInputFile
 
 load_dotenv()
 
@@ -177,7 +178,18 @@ async def check_subscriptions():
                         "Щоб повернутися — обери тариф, оплати і напиши мені знову! 🚀"
                     )
                 except Exception as e:
-                    logger.error(f"Помилка кику {user_id}: {e}")
+                    logger.error(f"Помилка кіку {user_id}: {e}")
+
+async def daily_backup():
+    try:
+        await bot.send_document(
+            chat_id=ADMIN_ID,
+            document=FSInputFile(DB_FILE),
+            caption=f"Щоденний бекап бази даних {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+        logger.info("Щоденний бекап бази надіслано адміну")
+    except Exception as e:
+        logger.error(f"Помилка щоденного бекапу: {e}")
 
 def get_user_status(user_id: int) -> dict | None:
     conn = sqlite3.connect(DB_FILE)
@@ -206,6 +218,8 @@ async def cmd_admin(message: Message):
         [InlineKeyboardButton(text="Додати підписку", callback_data="admin_addsub")],
         [InlineKeyboardButton(text="Видалити підписку", callback_data="admin_removesub")],
         [InlineKeyboardButton(text="Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="Перевірити закінчення підписок", callback_data="admin_checksubs")],
+        [InlineKeyboardButton(text="Зробити бекап бази", callback_data="admin_backupdb")],
         [InlineKeyboardButton(text="Закрити меню", callback_data="admin_close")]
     ])
 
@@ -262,6 +276,27 @@ async def admin_callback(callback: CallbackQuery):
 
         text = f"Статистика:\nАктивних підписників: {active}\nВсього записів: {total}"
         await callback.message.edit_text(text)  # без reply_markup
+
+    elif data == "admin_checksubs":
+        await check_subscriptions()  # викликаємо функцію перевірки
+        await callback.message.edit_text(
+            "Перевірку закінчення підписок виконано вручну!\n"
+            "Нагадування/кіки відправлено, якщо потрібно.",
+        )
+        await callback.answer("Перевірку виконано!")
+
+    elif data == "admin_backupdb":
+        try:
+            await callback.message.answer_document(
+                FSInputFile(DB_FILE),
+                caption=f"Ручний бекап бази даних {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+            await callback.message.edit_text(
+                "Бекап бази надіслано тобі як документ!",
+            )
+        except Exception as e:
+            await callback.message.edit_text(f"Помилка бекапу: {str(e)}")
+        await callback.answer("Бекап надіслано!")
 
     elif data == "admin_close":
         await callback.message.delete()
@@ -325,8 +360,7 @@ def get_payment_kb(user_id: int, tariff: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="← Назад до меню", callback_data="back")]
     ])
 
-
-@dp.message(F.photo | F.document | F.video)
+@dp.message(F.photo | F.document | F.video, F.chat.type == "private")
 async def handle_proof(message: Message):
     user_id = message.from_user.id
     logger.info(f"Отримано медіа від {user_id} (тип: {message.content_type})")
@@ -335,28 +369,41 @@ async def handle_proof(message: Message):
         data = waiting_for_proof[user_id]
         username = data["username"]
         tariff_name = data["tariff"]
+        period = data["period"]  # 14days або 1month
 
-        logger.info(f"Пересилання медіа адміну від {user_id}")
-
-        await bot.forward_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id
-        )
-
-        await bot.send_message(
-            ADMIN_ID,
-            f"Ось скрін/чек від @{username} (ID: {user_id})\n"
-            f"Тариф: {tariff_name}\n"
-            "Перевірте, будь ласка!"
-        )
-
+        # 1. Повідомляємо користувачу, що чек надіслано
         await message.answer(
             "Скрін/чек успішно надіслано адміністратору! ❤️\n"
             "Зачекайте на підтвердження."
         )
 
+        # 2. Пересилаємо медіа адміну
+        forwarded = await bot.forward_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id
+        )
+
+        # 3. Надсилаємо текст адміну з кнопкою «Апрув»
+        approve_button = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Апрув цього платежу",
+                callback_data=f"approve_{user_id}_{period}"
+            )]
+        ])
+
+        await bot.send_message(
+            ADMIN_ID,
+            f"Ось скрін/чек від @{username} (ID: {user_id})\n"
+            f"Тариф: {tariff_name}\n"
+            "Перевірте, будь ласка!",
+            reply_markup=approve_button,
+            reply_to_message_id=forwarded.message_id  # прив'язуємо до пересланого медіа
+        )
+
+        # Чистимо стан після надсилання
         del waiting_for_proof[user_id]
+
     else:
         await message.answer("Якщо це оплата — спочатку натисніть «Я оплатив» після вибору тарифу 🙏")
 
@@ -421,6 +468,20 @@ async def cmd_approve(message: Message):
         logger.error(f"Помилка в /approve: {e}")
         await message.answer(f"Помилка: {str(e)}")
 
+@dp.message(Command("backupdb"))
+async def cmd_backupdb(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        await message.answer_document(
+            FSInputFile(DB_FILE),
+            caption=f"Ручний бекап бази даних {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+        logger.info(f"Ручний бекап бази надіслано адміну {ADMIN_ID}")
+    except Exception as e:
+        await message.answer(f"Помилка надсилання бази: {str(e)}")
+        logger.error(f"Помилка ручного бекапу: {e}")
 
 @dp.chat_join_request()
 async def auto_approve_join(request: ChatJoinRequest):
@@ -508,7 +569,7 @@ async def my_status(callback: CallbackQuery):
         end_date = datetime.fromisoformat(data["end_date"])
         days_left = (end_date - datetime.utcnow()).days
         text = (
-            f"Твоя підписка: **{data['tariff']}**\n"
+            f"Твоя підписка в статусі: **{data['status']}**\n"
             f"Активна до: **{end_date.strftime('%d.%m.%Y')}**\n"
             f"Залишилось приблизно {max(0, days_left)} днів\n\n"
             "Продовжуй рухатись до мети! 🚀"
@@ -525,17 +586,16 @@ async def tariff_chosen(callback: CallbackQuery):
     price = "500 грн" if period == "14days" else "800 грн"
     user_id = callback.from_user.id
 
-    payment_code = f"Підписка {user_id}-{period}"
+    payment_code = f"Підписка {user_id}"
 
     text = (
         f"Ти обрав(ла) тариф: **{tariff_name} — {price}** ✅\n\n"
-        f"Перекажіть **{price}** на рахунок:\n"
+        f"Перекажіть **{price}** на рахунок (просто натисни на IBAN та призначення — вони скопіюються):\n\n"
         f"Отримувач: {PAYMENT_RECIPIENT}\n"
-        f"IBAN: {PAYMENT_IBAN}\n"
+        f"IBAN: `{PAYMENT_IBAN}`\n"
         f"Банк: {PAYMENT_BANK}\n\n"
-        f"**Обов’язково в призначенні платежу вкажіть код:**\n"
-        f"`{payment_code}`\n\n"
-        "Після оплати натисніть кнопку нижче і надішліть скрін або чек оплати."
+        f"**Призначення платежу (обов’язково!):** `{payment_code}`\n\n"
+        "Після оплати натисни кнопку нижче і надішли скрін або чек оплати."
     )
 
     await callback.message.edit_text(
@@ -545,6 +605,53 @@ async def tariff_chosen(callback: CallbackQuery):
     )
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("approve_"))
+async def admin_approve_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Тільки адмін може апрувати!", show_alert=True)
+        return
+
+    _, user_id_str, period = callback.data.split("_")
+    user_id = int(user_id_str)
+
+    # Отримуємо дані (як у старому коді)
+    tariff_name = "14 днів" if period == "14days" else "1 місяць"
+    days = 14 if period == "14days" else 30
+
+    try:
+        expire_date = datetime.utcnow() + timedelta(hours=24)
+        invite = await bot.create_chat_invite_link(
+            chat_id=GROUP_ID,
+            creates_join_request=True,
+            name=f"Доступ для {user_id}",
+            expire_date=expire_date
+        )
+        link = invite.invite_link
+
+        username = (await bot.get_chat(user_id)).username or f"id{user_id}"
+        save_subscription(user_id, username, tariff_name, days)
+
+        # Повідомляємо адміну про успіх (редагуємо повідомлення з чеком)
+        await callback.message.edit_text(
+            f"Апрув виконано для {user_id} ({tariff_name})!\n"
+            f"Посилання створено (24 год):\n{link}\n"
+            "Підписка збережена."
+        )
+
+        # Надсилаємо користувачу посилання
+        await bot.send_message(
+            user_id,
+            "Вітаємо в нашій дружній спільноті! 🎉\n"
+            "Доступ активовано!\n\n"
+            f"Натисни посилання (діє 24 години):\n{link}\n\n"
+            "Після натискання бот автоматично схвалить твій запит 💪"
+        )
+
+        await callback.answer("Апрув успішний!")
+
+    except Exception as e:
+        logger.error(f"Помилка апруву через кнопку: {e}")
+        await callback.answer(f"Помилка: {str(e)}", show_alert=True)
 
 @dp.callback_query(F.data.startswith("paid_"))
 async def user_paid(callback: CallbackQuery):
@@ -621,8 +728,15 @@ async def on_startup(bot: Bot):
         CronTrigger(hour=9, minute=0),
         id='daily_subscription_check'
     )
+    # Додаємо щоденний бекап бази о 23:00 UTC
+    scheduler.add_job(
+        daily_backup,
+        CronTrigger(hour=23, minute=0),
+        id='daily_backup'
+    )
+
     scheduler.start()
-    logger.info("Планувальник запущено (перевірка щодня о 9:00)")
+    logger.info("Планувальник запущено (перевірка щодня о 9:00 + бекап о 23:00)")
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
