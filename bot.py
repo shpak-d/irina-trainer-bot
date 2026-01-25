@@ -220,6 +220,7 @@ async def cmd_admin(message: Message):
         [InlineKeyboardButton(text="Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="Перевірити закінчення підписок", callback_data="admin_checksubs")],
         [InlineKeyboardButton(text="Зробити бекап бази", callback_data="admin_backupdb")],
+        [InlineKeyboardButton(text="Розіслати запрошення з БД", callback_data="admin_sendinvites")],
         [InlineKeyboardButton(text="Закрити меню", callback_data="admin_close")]
     ])
 
@@ -298,6 +299,43 @@ async def admin_callback(callback: CallbackQuery):
             await callback.message.edit_text(f"Помилка бекапу: {str(e)}")
         await callback.answer("Бекап надіслано!")
 
+    elif data == "admin_sendinvites":
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM users WHERE status IN ('active', 'grace')")
+        users = [row[0] for row in cur.fetchall()]
+        conn.close()
+
+        sent = 0
+        errors = 0
+        for uid in users:
+            try:
+                expire_date = datetime.utcnow() + timedelta(hours=24)
+                invite = await bot.create_chat_invite_link(
+                    chat_id=GROUP_ID,
+                    creates_join_request=True,
+                    name=f"Відновлення доступу для {uid}",
+                    expire_date=expire_date
+                )
+                link = invite.invite_link
+
+                await bot.send_message(
+                    uid,
+                    "Доступ відновлено! 🎉\n"
+                    "Приєднуйся назад до групи:\n"
+                    f"{link}\n"
+                    "Посилання діє 24 години. Бот схвалить запит автоматично 💪"
+                )
+                sent += 1
+            except Exception as e:
+                logger.error(f"Помилка розсилки запрошення {uid}: {e}")
+                errors += 1
+
+        await callback.message.edit_text(
+            f"Розсилку завершено. Надіслано {sent} запрошень з {len(users)}. Помилок: {errors}"
+        )
+        await callback.answer("Розсилка запрошень завершено")
+
     elif data == "admin_close":
         await callback.message.delete()
 
@@ -345,7 +383,14 @@ async def cmd_removesub(message: Message):
     conn.commit()
     conn.close()
 
-    await message.answer(f"Підписка для {user_id} видалена.")
+    try:
+        await bot.ban_chat_member(chat_id=GROUP_ID, user_id=user_id)
+        await bot.unban_chat_member(chat_id=GROUP_ID, user_id=user_id)  # щоб можна було повернутися пізніше
+        logger.info(f"Користувач {user_id} видалений з групи після removesub")
+        await message.answer(f"Підписка для {user_id} видалена з БД і користувач видалений з групи.")
+    except Exception as e:
+        logger.error(f"Помилка кику після removesub: {e}")
+        await message.answer(f"Підписка видалена з БД, але помилка видалення з групи: {str(e)}")
 
 @dp.message(Command("checksubs"))
 async def cmd_checksubs(message: Message):
