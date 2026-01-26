@@ -257,7 +257,7 @@ async def admin_callback(callback: CallbackQuery):
         try:
             total_members = await bot.get_chat_member_count(GROUP_ID)
             admins = await bot.get_chat_administrators(GROUP_ID)
-            total_admins = len(admins)
+            total_admins = len(admins)-1
             with sqlite3.connect(DB_FILE) as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM users WHERE status IN ('active', 'grace')")
