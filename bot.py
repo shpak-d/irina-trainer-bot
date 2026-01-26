@@ -409,7 +409,8 @@ async def auto_approve_join(request: ChatJoinRequest):
 
 @dp.message(F.chat.type == "private")
 async def welcome(message: Message):
-    if message.from_user.id == ADMIN_ID:
+    if message.from_user.id == ADMIN_ID and not message.text.startswith('/'):
+        await cmd_admin(message)
         return
     await message.answer(
         "Привіт! 👋 Дякую, що звернувся до мене!\nЯ — бот для платних тренувань Ірини: відео, чат, підтримка та мотивація 💙\n\nОбери тариф і почнемо твій шлях до результатів! 🚀",
