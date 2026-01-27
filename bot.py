@@ -487,7 +487,8 @@ async def admin_approve_callback(callback: CallbackQuery):
         return
     _, user_id_str, period = callback.data.split("_")
     user_id = int(user_id_str)
-    await approve_user(user_id, period, callback)
+    await callback.answer("Апрув прийнято, обробляю…")
+    asyncio.create_task(approve_user(user_id, period, callback))
 
 
 @dp.callback_query(F.data.startswith("paid_"))
@@ -521,8 +522,7 @@ async def on_startup(bot: Bot):  # Об'єднано дублювання: webho
 
 
 async def on_shutdown(bot: Bot):
-    await bot.delete_webhook()
-    logger.info("Webhook видалено")
+    logger.warning("Shutdown detected, webhook not removed (Render safe)")
 
 
 def main():
@@ -536,6 +536,12 @@ def main():
     init_db()
     print("База даних ініціалізована")
     app = web.Application()
+
+    async def healthcheck(request):
+        return web.Response(text="ok")
+
+    app.router.add_get("/", healthcheck)
+
     webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET,
                                            handle_in_background=True)
     webhook_handler.register(app, path=WEBHOOK_PATH)
