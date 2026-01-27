@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -28,9 +27,6 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-UTC = timezone.utc
-KYIV_TZ = ZoneInfo("Europe/Kyiv")
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 waiting_for_proof = {}
@@ -47,7 +43,7 @@ DB_FILE = "users.db"
 
 
 def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
+    with sqlite3.connect(DB_FILE) as conn:  # Додано context manager для DB
         cur = conn.cursor()
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -60,19 +56,11 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
-        # Одноразова міграція: додаємо +00:00 до старих дат, якщо його немає
-        cur.execute("SELECT user_id, end_date FROM users")
-        rows = cur.fetchall()
-        for uid, ed in rows:
-            if ed and '+' not in ed and 'Z' not in ed:
-                new_ed = ed + "+00:00"
-                cur.execute("UPDATE users SET end_date = ? WHERE user_id = ?", (new_ed, uid))
         conn.commit()
 
 
 def save_subscription(user_id: int, username: str, tariff: str, days: int):
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     with sqlite3.connect(DB_FILE) as conn:
         cur = conn.cursor()
         cur.execute("SELECT end_date, status FROM users WHERE user_id = ?", (user_id,))
@@ -112,7 +100,7 @@ async def check_subscriptions():
             WHERE status IN ('active', 'grace')
         """)
         users = cur.fetchall()
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     for user_id, username, tariff, end_date_str, status in users:
         end_date = datetime.fromisoformat(end_date_str)
         days_past_end = (now - end_date).days
@@ -147,9 +135,8 @@ async def check_subscriptions():
 
 async def daily_backup():
     try:
-        now_kyiv = datetime.now(KYIV_TZ)
         await bot.send_document(chat_id=ADMIN_ID, document=FSInputFile(DB_FILE),
-                                caption=f"Щоденний бекап бази даних {now_kyiv.strftime('%Y-%m-%d %H:%M %Z')}")
+                                caption=f"Щоденний бекап бази даних {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
         logger.info("Щоденний бекап бази надіслано адміну")
     except Exception as e:
         logger.error(f"Помилка щоденного бекапу: {e}")
@@ -221,43 +208,11 @@ async def admin_callback(callback: CallbackQuery):
         await callback.message.edit_text(
             "Перевірку закінчення підписок виконано вручну!\nНагадування/кіки відправлено, якщо потрібно.")
         await callback.answer("Перевірку виконано!")
-    elif data == "admin_backupdb":
-        try:
-            now_kyiv = datetime.now(KYIV_TZ)
-            await callback.message.answer_document(FSInputFile(DB_FILE),
-                                                   caption=f"Ручний бекап бази даних {now_kyiv.strftime('%Y-%m-%d %H:%M %Z')}")
-            await callback.message.edit_text("Бекап бази надіслано тобі як документ!")
-        except Exception as e:
-            await callback.message.edit_text(f"Помилка бекапу: {str(e)}")
-        await callback.answer("Бекап надіслано!")
-    elif data == "admin_sendinvites":
-        with sqlite3.connect(DB_FILE) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT user_id FROM users WHERE status IN ('active', 'grace')")
-            users = [row[0] for row in cur.fetchall()]
-        sent = 0
-        errors = 0
-        for uid in users:
-            try:
-                expire_date = datetime.now(UTC) + timedelta(hours=24)
-                invite = await bot.create_chat_invite_link(GROUP_ID, creates_join_request=True,
-                                                           name=f"Відновлення доступу для {uid}",
-                                                           expire_date=expire_date)
-                link = invite.invite_link
-                await bot.send_message(uid,
-                                       f"Доступ відновлено! 🎉\nПриєднуйся назад до групи:\n{link}\nПосилання діє 24 години. Бот схвалить запит автоматично 💪")
-                sent += 1
-            except Exception as e:
-                logger.error(f"Помилка розсилки запрошення {uid}: {e}")
-                errors += 1
-        await callback.message.edit_text(
-            f"Розсилку завершено. Надіслано {sent} запрошень з {len(users)}. Помилок: {errors}")
-        await callback.answer("Розсилка запрошень завершено")
     elif data == "admin_checkzaycev":
         try:
             total_members = await bot.get_chat_member_count(GROUP_ID)
             admins = await bot.get_chat_administrators(GROUP_ID)
-            total_admins = len(admins)
+            total_admins = len(admins) - 1
             with sqlite3.connect(DB_FILE) as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM users WHERE status IN ('active', 'grace')")
@@ -272,6 +227,37 @@ async def admin_callback(callback: CallbackQuery):
         except Exception as e:
             await callback.message.edit_text(f"Помилка перевірки: {str(e)}")
             await callback.answer("Помилка!", show_alert=True)
+    elif data == "admin_backupdb":
+        try:
+            await callback.message.answer_document(FSInputFile(DB_FILE),
+                                                   caption=f"Ручний бекап бази даних {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+            await callback.message.edit_text("Бекап бази надіслано тобі як документ!")
+        except Exception as e:
+            await callback.message.edit_text(f"Помилка бекапу: {str(e)}")
+        await callback.answer("Бекап надіслано!")
+    elif data == "admin_sendinvites":
+        with sqlite3.connect(DB_FILE) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT user_id FROM users WHERE status IN ('active', 'grace')")
+            users = [row[0] for row in cur.fetchall()]
+        sent = 0
+        errors = 0
+        for uid in users:
+            try:
+                expire_date = datetime.now(timezone.utc) + timedelta(hours=24)
+                invite = await bot.create_chat_invite_link(GROUP_ID, creates_join_request=True,
+                                                           name=f"Відновлення доступу для {uid}",
+                                                           expire_date=expire_date)
+                link = invite.invite_link
+                await bot.send_message(uid,
+                                       f"Доступ відновлено! 🎉\nПриєднуйся назад до групи:\n{link}\nПосилання діє 24 години. Бот схвалить запит автоматично 💪")
+                sent += 1
+            except Exception as e:
+                logger.error(f"Помилка розсилки запрошення {uid}: {e}")
+                errors += 1
+        await callback.message.edit_text(
+            f"Розсилку завершено. Надіслано {sent} запрошень з {len(users)}. Помилок: {errors}")
+        await callback.answer("Розсилка запрошень завершено")
     elif data == "admin_close":
         await callback.message.delete()
     await callback.answer()
@@ -320,7 +306,7 @@ async def cmd_removesub(message: Message):
         logger.info(f"Користувач {user_id} видалений з групи після removesub")
         await message.answer(f"Підписка для {user_id} видалена з БД і користувач видалений з групи.")
     except Exception as e:
-        logger.error(f"Помилка кіку після removesub: {e}")
+        logger.error(f"Помилка кику після removesub: {e}")
         await message.answer(f"Підписка видалена з БД, але помилка видалення з групи: {str(e)}")
 
 
@@ -362,11 +348,11 @@ async def handle_proof(message: Message):
 
 
 async def approve_user(user_id: int, period: str,
-                       message_or_callback):
+                       message_or_callback):  # Нова функція для консолідації апрув-логіки (видалено дублювання з cmd_approve і callback)
     tariff_name = "14 днів" if period == "14days" else "1 місяць"
     days = 14 if period == "14days" else 30
     try:
-        expire_date = datetime.now(UTC) + timedelta(hours=24)
+        expire_date = datetime.now(timezone.utc) + timedelta(hours=24)
         invite = await bot.create_chat_invite_link(GROUP_ID, creates_join_request=True, name=f"Доступ для {user_id}",
                                                    expire_date=expire_date)
         link = invite.invite_link
@@ -403,7 +389,7 @@ async def cmd_approve(message: Message):
     except ValueError:
         await message.answer("user_id має бути числом.")
         return
-    period = "14days"  # Дефолт, якщо не з waiting_for_proof
+    period = "14days"  # Дефолт, якщо не з waiting_for_proof (спрощено, бо ручний апрув не залежить від стану)
     if user_id in waiting_for_proof:
         period = waiting_for_proof[user_id]["period"]
         del waiting_for_proof[user_id]
@@ -415,9 +401,8 @@ async def cmd_backupdb(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
     try:
-        now_kyiv = datetime.now(KYIV_TZ)
         await message.answer_document(FSInputFile(DB_FILE),
-                                      caption=f"Ручний бекап бази даних {now_kyiv.strftime('%Y-%m-%d %H:%M %Z')}")
+                                      caption=f"Ручний бекап бази даних {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
         logger.info(f"Ручний бекап бази надіслано адміну {ADMIN_ID}")
     except Exception as e:
         await message.answer(f"Помилка надсилання бази: {str(e)}")
@@ -476,10 +461,9 @@ async def my_status(callback: CallbackQuery):
     if not data or data["status"] not in ["active", "grace"]:
         text = "Твій статус підписки поки що не активовано.\nОбери тариф, щоб отримати доступ! 💪"
     else:
-        end_date_utc = datetime.fromisoformat(data["end_date"])
-        end_date_kyiv = end_date_utc.astimezone(KYIV_TZ)
-        days_left = (end_date_utc - datetime.now(UTC)).days
-        text = f"Твоя підписка в статусі: **{data['status']}**\nАктивна до: **{end_date_kyiv.strftime('%d.%m.%Y %H:%M')}** (Київ)\nЗалишилось приблизно {max(0, days_left)} днів\n\nПродовжуй рухатись до мети! 🚀"
+        end_date = datetime.fromisoformat(data["end_date"])
+        days_left = (end_date - datetime.now(timezone.utc)).days
+        text = f"Твоя підписка в статусі: **{data['status']}**\nАктивна до: **{end_date.strftime('%d.%m.%Y')}**\nЗалишилось приблизно {max(0, days_left)} днів\n\nПродовжуй рухатись до мети! 🚀"
     await callback.message.edit_text(text, reply_markup=main_menu, parse_mode="Markdown")
     await callback.answer()
 
@@ -490,7 +474,7 @@ async def tariff_chosen(callback: CallbackQuery):
     tariff_name = "14 днів" if period == "14days" else "1 місяць"
     price = "500 грн" if period == "14days" else "800 грн"
     user_id = callback.from_user.id
-    payment_code = f"Тренування {user_id}"
+    payment_code = f"Підписка {user_id}"
     text = f"Ти обрав(ла) тариф: **{tariff_name} — {price}** ✅\n\nПерекажіть **{price}** на рахунок (просто натисни на IBAN та призначення — вони скопіюються):\n\nОтримувач: {PAYMENT_RECIPIENT}\nIBAN: `{PAYMENT_IBAN}`\nБанк: {PAYMENT_BANK}\n\n**Призначення платежу (обов’язково!):** `{payment_code}`\n\nПісля оплати натисни кнопку нижче і надішли скрін або чек оплати."
     await callback.message.edit_text(text, reply_markup=get_payment_kb(user_id, period), parse_mode="Markdown")
     await callback.answer()
@@ -522,19 +506,18 @@ async def user_paid(callback: CallbackQuery):
                            f"Новий запит на перевірку!\nКористувач: @{username} (ID: {user_id})\nТариф: {tariff_name}\nЧекаємо скрін/чек...")
 
 
-async def on_startup(bot: Bot):
+async def on_startup(bot: Bot):  # Об'єднано дублювання: webhook + scheduler
     if not BASE_WEBHOOK_URL:
         logger.error("BASE_WEBHOOK_URL не встановлено в змінних середовища!")
-        raise SystemExit(1)
+        raise SystemExit(1)  # Замість sys.exit для asyncio
     webhook_url = f"{BASE_WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
     await bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True)
     logger.info(f"Webhook встановлено на {webhook_url}")
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_subscriptions, CronTrigger(hour=9, minute=0, timezone="Europe/Kyiv"),
-                      id='daily_subscription_check')
-    scheduler.add_job(daily_backup, CronTrigger(hour=23, minute=0, timezone="Europe/Kyiv"), id='daily_backup')
+    scheduler.add_job(check_subscriptions, CronTrigger(hour=9, minute=0), id='daily_subscription_check')
+    scheduler.add_job(daily_backup, CronTrigger(hour=23, minute=0), id='daily_backup')
     scheduler.start()
-    logger.info("Планувальник запущено (перевірка щодня о 9:00 + бекап о 23:00 за київським часом)")
+    logger.info("Планувальник запущено (перевірка щодня о 9:00 + бекап о 23:00)")
 
 
 async def on_shutdown(bot: Bot):
