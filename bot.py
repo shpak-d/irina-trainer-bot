@@ -39,7 +39,7 @@ tariffs_menu = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="1 місяць — 800 грн", callback_data="tariff_1month")],
     [InlineKeyboardButton(text="← Назад", callback_data="back")]
 ])
-DB_FILE = "users.db"
+DB_FILE = "/data/users.db"
 
 
 def init_db():
@@ -516,7 +516,7 @@ async def on_startup(bot: Bot):  # Об'єднано дублювання: webho
     logger.info(f"Webhook встановлено на {webhook_url}")
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_subscriptions, CronTrigger(hour=9, minute=0), id='daily_subscription_check')
-    scheduler.add_job(daily_backup, CronTrigger(hour=23, minute=0), id='daily_backup')
+    scheduler.add_job(daily_backup, CronTrigger(hour=21, minute=0), id='daily_backup')
     scheduler.start()
     logger.info("Планувальник запущено (перевірка щодня о 9:00 + бекап о 23:00)")
 
