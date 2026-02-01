@@ -103,8 +103,8 @@ async def check_subscriptions():
     now = datetime.now(timezone.utc)
     for user_id, username, tariff, end_date_str, status in users:
         end_date = datetime.fromisoformat(end_date_str)
-        days_past_end = (now - end_date).days
-        if status == 'active' and days_past_end >= 0:
+        days_before_end = (end_date - now).days
+        if status == 'active' and days_before_end <= 1:
             new_end = end_date + timedelta(days=2)
             with sqlite3.connect(DB_FILE) as conn:
                 cur = conn.cursor()
@@ -112,7 +112,7 @@ async def check_subscriptions():
                             (new_end.isoformat(), user_id))
                 conn.commit()
             await bot.send_message(user_id,
-                                   f"Привіт! Твоя підписка ({tariff}) закінчилася вчора.\nУ тебе є ще 2 дні grace-періоду, щоб продовжити без втрати доступу! 💪\nОбери тариф у меню і оплати, щоб залишитися з нами ❤️")
+                                   f"Привіт! Твоя підписка ({tariff}) закінчується сьогодні.\nНе хвилюйся, у тебе буде ще 2 дні grace-періоду, щоб продовжити без втрати доступу! 💪\nОбери тариф у меню і оплати, щоб залишитися з нами ❤️")
             logger.info(f"Grace почався для {user_id}")
         elif status == 'grace':
             end_date = datetime.fromisoformat(end_date_str)
@@ -182,6 +182,7 @@ async def cmd_admin(message: Message):
         [InlineKeyboardButton(text="Зробити бекап бази", callback_data="admin_backupdb")],
         [InlineKeyboardButton(text="Розіслати запрошення з БД", callback_data="admin_sendinvites")],
         [InlineKeyboardButton(text="Перевірка зайців", callback_data="admin_checkzaycev")],
+        [InlineKeyboardButton(text="Очистити expired записи (спитай Дена перед натисканням)", callback_data="admin_clean_expired")],
         [InlineKeyboardButton(text="Закрити меню", callback_data="admin_close")]
     ])
     await message.answer("Вітаю в адмін-панелі! 💻\nЩо хочеш зробити?", reply_markup=admin_menu)
@@ -243,6 +244,16 @@ async def admin_callback(callback: CallbackQuery):
         except Exception as e:
             await callback.message.edit_text(f"Помилка перевірки: {str(e)}")
             await callback.answer("Помилка!", show_alert=True)
+    elif data == "admin_clean_expired":
+        with sqlite3.connect(DB_FILE) as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM users WHERE status = 'expired'")
+            deleted_count = cur.rowcount
+            conn.commit()
+
+        await callback.message.edit_text(
+            f"Очищено {deleted_count} записів зі статусом 'expired'.\nБаза чиста! 🧹")
+        await callback.answer("База почищена!")
     elif data == "admin_backupdb":
         try:
             await callback.message.answer_document(FSInputFile(DB_FILE),
