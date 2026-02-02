@@ -210,7 +210,7 @@ async def admin_callback(callback: CallbackQuery):
         example = "/addsub 123456789 14days 14"
         await callback.message.edit_text(
             "Формат: /addsub [user_id] [tariff] [days]\n\n"
-            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"Приклад (натисни, щоб скопіювати):\n"
             f"`{example}`",
             parse_mode="Markdown"
         )
@@ -220,7 +220,7 @@ async def admin_callback(callback: CallbackQuery):
         example = "/removesub 123456789"
         await callback.message.edit_text(
             "Формат: /removesub [user_id]\n\n"
-            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"Приклад (натисни, щоб скопіювати):\n"
             f"`{example}`",
             parse_mode="Markdown"
         )
@@ -313,7 +313,7 @@ async def cmd_addsub(message: Message):
         example = "/addsub 123456789 14days 14"
         await message.answer(
             "Формат: /addsub [user_id] [tariff] [days]\n\n"
-            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"Приклад (натисни, щоб скопіювати):\n"
             f"`{example}`",
             parse_mode="Markdown"
         )
@@ -343,7 +343,7 @@ async def cmd_addsub(message: Message):
             user_id,
             f"Підписка активована вручну адміном! 🎉\n"
             f"Приєднуйся до групи (посилання діє 24 години):\n"
-            f"`{link}`\n"
+            f"{link}\n"
             "Бот автоматично схвалить запит 💪"
         )
         await message.answer(
@@ -364,7 +364,7 @@ async def cmd_removesub(message: Message):
         example = "/removesub 123456789"
         await message.answer(
             "Формат: /removesub [user_id]\n\n"
-            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"Приклад (натисни, щоб скопіювати):\n"
             f"`{example}`",
             parse_mode="Markdown"
         )
