@@ -289,7 +289,6 @@ async def admin_callback(callback: CallbackQuery):
         await callback.message.delete()
     await callback.answer()
 
-
 @dp.message(Command("addsub"))
 async def cmd_addsub(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -297,18 +296,11 @@ async def cmd_addsub(message: Message):
 
     args = message.text.split()[1:]
     if len(args) < 3:
-        example_text = "/addsub 123456789 14days 14"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="Скопіювати приклад",
-                copy_text=example_text  # при натисканні копіює текст у буфер
-            )]
-        ])
+        example = "/addsub 123456789 14days 14"
         await message.answer(
-            "Формат: /addsub [user_id] [tariff] [days]\n"
-            f"Приклад: `{example_text}`\n\n"
-            "Натисни кнопку нижче, щоб скопіювати приклад:",
-            reply_markup=kb,
+            "Формат: /addsub [user_id] [tariff] [days]\n\n"
+            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"`{example}`",
             parse_mode="Markdown"
         )
         return
@@ -323,8 +315,7 @@ async def cmd_addsub(message: Message):
 
     username = (await bot.get_chat(user_id)).username or f"id{user_id}"
     save_subscription(user_id, username, tariff, days)
-
-    # Автоматичне надсилання запрошення (теж зручно)
+    # Автоматичне надсилання запрошення
     try:
         expire_date = datetime.now(timezone.utc) + timedelta(hours=24)
         invite = await bot.create_chat_invite_link(
@@ -337,12 +328,13 @@ async def cmd_addsub(message: Message):
         await bot.send_message(
             user_id,
             f"Підписка активована вручну адміном! 🎉\n"
-            f"Приєднуйся до групи (посилання діє 24 години):\n{link}\n"
+            f"Приєднуйся до групи (посилання діє 24 години):\n"
+            f"`{link}`\n"
             "Бот автоматично схвалить запит 💪"
         )
         await message.answer(
             f"Підписка додана/продовжена для {user_id} ({tariff}, {days} днів)\n"
-            f"Запрошення надіслано користувачу: {link}"
+            f"Запрошення надіслано користувачу: `{link}`"
         )
     except Exception as e:
         logger.error(f"Помилка надсилання запрошення після addsub {user_id}: {e}")
@@ -355,18 +347,11 @@ async def cmd_removesub(message: Message):
 
     args = message.text.split()
     if len(args) < 2:
-        example_text = "/removesub 123456789"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="Скопіювати приклад",
-                copy_text=example_text
-            )]
-        ])
+        example = "/removesub 123456789"
         await message.answer(
-            "Формат: /removesub [user_id]\n"
-            f"Приклад: `{example_text}`\n\n"
-            "Натисни кнопку нижче, щоб скопіювати приклад:",
-            reply_markup=kb,
+            "Формат: /removesub [user_id]\n\n"
+            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"`{example}`",
             parse_mode="Markdown"
         )
         return
