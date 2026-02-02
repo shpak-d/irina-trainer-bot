@@ -207,10 +207,24 @@ async def admin_callback(callback: CallbackQuery):
                 text += f"ID: {uid} | @{uname or 'немає'} | {tar} | До: {edate} | {stat}\n"
         await callback.message.edit_text(text)
     elif data == "admin_addsub":
+        example = "/addsub 123456789 14days 14"
         await callback.message.edit_text(
-            "Введи: /addsub [user_id] [tariff] [days]\nПриклад: /addsub 123456789 14days 14")
+            "Формат: /addsub [user_id] [tariff] [days]\n\n"
+            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"`{example}`",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+
     elif data == "admin_removesub":
-        await callback.message.edit_text("Введи: /removesub [user_id]\nПриклад: /removesub 123456789")
+        example = "/removesub 123456789"
+        await callback.message.edit_text(
+            "Формат: /removesub [user_id]\n\n"
+            f"Приклад (натисни та утримуй, щоб скопіювати):\n"
+            f"`{example}`",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
     elif data == "admin_stats":
         with sqlite3.connect(DB_FILE) as conn:
             cur = conn.cursor()
