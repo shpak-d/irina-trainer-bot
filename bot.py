@@ -294,10 +294,25 @@ async def admin_callback(callback: CallbackQuery):
 async def cmd_addsub(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
+
     args = message.text.split()[1:]
     if len(args) < 3:
-        await message.answer("Формат: /addsub [user_id] [tariff] [days]\nПриклад: /addsub 123456789 14days 14")
+        example_text = "/addsub 123456789 14days 14"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Скопіювати приклад",
+                copy_text=example_text  # при натисканні копіює текст у буфер
+            )]
+        ])
+        await message.answer(
+            "Формат: /addsub [user_id] [tariff] [days]\n"
+            f"Приклад: `{example_text}`\n\n"
+            "Натисни кнопку нижче, щоб скопіювати приклад:",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
         return
+
     try:
         user_id = int(args[0])
         tariff = args[1]
@@ -305,37 +320,76 @@ async def cmd_addsub(message: Message):
     except ValueError:
         await message.answer("Неправильний формат.")
         return
+
     username = (await bot.get_chat(user_id)).username or f"id{user_id}"
     save_subscription(user_id, username, tariff, days)
-    await message.answer(f"Підписка додана/продовжена для {user_id} ({tariff}, {days} днів)")
 
+    # Автоматичне надсилання запрошення (теж зручно)
+    try:
+        expire_date = datetime.now(timezone.utc) + timedelta(hours=24)
+        invite = await bot.create_chat_invite_link(
+            GROUP_ID,
+            creates_join_request=True,
+            name=f"Доступ для {user_id} після addsub",
+            expire_date=expire_date
+        )
+        link = invite.invite_link
+        await bot.send_message(
+            user_id,
+            f"Підписка активована вручну адміном! 🎉\n"
+            f"Приєднуйся до групи (посилання діє 24 години):\n{link}\n"
+            "Бот автоматично схвалить запит 💪"
+        )
+        await message.answer(
+            f"Підписка додана/продовжена для {user_id} ({tariff}, {days} днів)\n"
+            f"Запрошення надіслано користувачу: {link}"
+        )
+    except Exception as e:
+        logger.error(f"Помилка надсилання запрошення після addsub {user_id}: {e}")
+        await message.answer(f"Підписка додана, але помилка надсилання запрошення: {str(e)}")
 
 @dp.message(Command("removesub"))
 async def cmd_removesub(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
+
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("Формат: /removesub [user_id]")
+        example_text = "/removesub 123456789"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Скопіювати приклад",
+                copy_text=example_text
+            )]
+        ])
+        await message.answer(
+            "Формат: /removesub [user_id]\n"
+            f"Приклад: `{example_text}`\n\n"
+            "Натисни кнопку нижче, щоб скопіювати приклад:",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
         return
+
     try:
         user_id = int(args[1])
     except ValueError:
         await message.answer("user_id має бути числом.")
         return
+
     with sqlite3.connect(DB_FILE) as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
         conn.commit()
+
     try:
         await bot.ban_chat_member(chat_id=GROUP_ID, user_id=user_id)
         await bot.unban_chat_member(chat_id=GROUP_ID, user_id=user_id)
         logger.info(f"Користувач {user_id} видалений з групи після removesub")
         await message.answer(f"Підписка для {user_id} видалена з БД і користувач видалений з групи.")
     except Exception as e:
-        logger.error(f"Помилка кику після removesub: {e}")
+        logger.error(f"Помилка кіку після removesub: {e}")
         await message.answer(f"Підписка видалена з БД, але помилка видалення з групи: {str(e)}")
-
 
 @dp.message(Command("checksubs"))
 async def cmd_checksubs(message: Message):
