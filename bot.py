@@ -58,38 +58,62 @@ def init_db():
         ''')
         conn.commit()
 
-
 def save_subscription(user_id: int, username: str, tariff: str, days: int):
     now = datetime.now(timezone.utc)
     with sqlite3.connect(DB_FILE) as conn:
         cur = conn.cursor()
-        cur.execute("SELECT end_date, status FROM users WHERE user_id = ?", (user_id,))
+        cur.execute(
+            "SELECT end_date, status FROM users WHERE user_id = ?",
+            (user_id,)
+        )
         existing = cur.fetchone()
         if existing:
             old_end_str, status = existing
             old_end = datetime.fromisoformat(old_end_str)
-            base_date = max(now, old_end)
+            # Визначаємо точку відліку для нових днів
+            if status == 'active' and old_end > now:
+                # ще активна підписка → продовжуємо від кінця старої
+                base_date = old_end
+                action = "Продовжено активну підписку"
+            else:
+                # grace, expired, або інший статус → починаємо з моменту оплати
+                base_date = now
+                action = "Активовано нову підписку (grace/expired)"
+
             new_end = base_date + timedelta(days=days)
             cur.execute("""
                 UPDATE users
-                SET tariff = ?,
-                    start_date = ?,
-                    end_date = ?,
-                    status = 'active',
-                    username = ?
+                SET 
+                    tariff      = ?,
+                    start_date  = ?,
+                    end_date    = ?,
+                    status      = 'active',
+                    username    = ?
                 WHERE user_id = ?
-            """, (tariff, now.isoformat(), new_end.isoformat(), username, user_id))
-            logger.info(f"Продовжено підписку для {user_id}: +{days} днів")
+            """, (
+                tariff,
+                now.isoformat(),
+                new_end.isoformat(),
+                username,
+                user_id
+            ))
+            logger.info(f"{action} для {user_id}: +{days} днів, нова дата закінчення: {new_end.isoformat()}")
         else:
+            # Новий користувач — просто додаємо від зараз
             new_end = now + timedelta(days=days)
             cur.execute('''
                 INSERT INTO users
                 (user_id, username, tariff, start_date, end_date, status)
                 VALUES (?, ?, ?, ?, ?, 'active')
-            ''', (user_id, username, tariff, now.isoformat(), new_end.isoformat()))
-            logger.info(f"Нова підписка для {user_id}: {days} днів")
+            ''', (
+                user_id,
+                username,
+                tariff,
+                now.isoformat(),
+                new_end.isoformat()
+            ))
+            logger.info(f"Нова підписка для {user_id}: {days} днів, закінчення: {new_end.isoformat()}")
         conn.commit()
-
 
 async def check_subscriptions():
     with sqlite3.connect(DB_FILE) as conn:
@@ -104,7 +128,7 @@ async def check_subscriptions():
     for user_id, username, tariff, end_date_str, status in users:
         end_date = datetime.fromisoformat(end_date_str)
         days_before_end = (end_date - now).days
-        if status == 'active' and days_before_end <= 1:
+        if status == 'active' and days_before_end < 1:
             new_end = end_date + timedelta(days=2)
             with sqlite3.connect(DB_FILE) as conn:
                 cur = conn.cursor()
