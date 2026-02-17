@@ -577,7 +577,7 @@ async def tariff_chosen(callback: CallbackQuery):
     tariff_name = "14 днів" if period == "14days" else "1 місяць"
     price = "500 грн" if period == "14days" else "800 грн"
     user_id = callback.from_user.id
-    payment_code = f"Підписка {user_id}"
+    payment_code = f"Тренування {user_id}"
     text = f"Ти обрав(ла) тариф: **{tariff_name} — {price}** ✅\n\nПерекажіть **{price}** на рахунок (просто натисни на IBAN та призначення — вони скопіюються):\n\nОтримувач: {PAYMENT_RECIPIENT}\nIBAN: `{PAYMENT_IBAN}`\nБанк: {PAYMENT_BANK}\n\n**Призначення платежу (обов’язково!):** `{payment_code}`\n\nПісля оплати натисни кнопку нижче і надішли скрін або чек оплати."
     await callback.message.edit_text(text, reply_markup=get_payment_kb(user_id, period), parse_mode="Markdown")
     await callback.answer()
