@@ -577,7 +577,7 @@ async def tariff_chosen(callback: CallbackQuery):
     tariff_name = "14 днів" if period == "14days" else "1 місяць"
     price = "500 грн" if period == "14days" else "800 грн"
     user_id = callback.from_user.id
-    payment_code = f"Тренування {user_id}"
+    payment_code = f"За тренування" # {user_id} це для перевірки апі монобанкока
     text = f"Ти обрав(ла) тариф: **{tariff_name} — {price}** ✅\n\nПерекажіть **{price}** на рахунок (просто натисни на IBAN та призначення — вони скопіюються):\n\nОтримувач: {PAYMENT_RECIPIENT}\nIBAN: `{PAYMENT_IBAN}`\nБанк: {PAYMENT_BANK}\n\n**Призначення платежу (обов’язково!):** `{payment_code}`\n\nПісля оплати натисни кнопку нижче і надішли скрін або чек оплати."
     await callback.message.edit_text(text, reply_markup=get_payment_kb(user_id, period), parse_mode="Markdown")
     await callback.answer()
@@ -618,10 +618,10 @@ async def on_startup(bot: Bot):  # Об'єднано дублювання: webho
     await bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True)
     logger.info(f"Webhook встановлено на {webhook_url}")
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_subscriptions, CronTrigger(hour=9, minute=0), id='daily_subscription_check')
-    scheduler.add_job(daily_backup, CronTrigger(hour=21, minute=0), id='daily_backup')
+    scheduler.add_job(check_subscriptions, CronTrigger(hour=8, minute=0), id='daily_subscription_check')
+    scheduler.add_job(daily_backup, CronTrigger(hour=20, minute=0), id='daily_backup')
     scheduler.start()
-    logger.info("Планувальник запущено (перевірка щодня о 9:00 + бекап о 23:00)")
+    logger.info("Планувальник запущено (перевірка щодня о 11:00 + бекап о 23:00)")
 
 
 async def on_shutdown(bot: Bot):
